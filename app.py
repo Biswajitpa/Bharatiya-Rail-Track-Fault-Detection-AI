@@ -21,7 +21,7 @@ import uuid
 import re
 import difflib
 import csv
-
+from tensorflow.keras.models import load_model
 # ------------------------------------------------------------
 # PAGE CONFIG
 # ------------------------------------------------------------
@@ -447,7 +447,7 @@ st.write("")
 # MODEL FILE + TRAINING RESULTS
 # ------------------------------------------------------------
 
-MODEL_FILE_NAME = "railway_track_detection_final.h5"
+MODEL_FILE_NAME = "railway_track_detection_final.tflite"
 
 TRAINING_RESULTS = {
     "model_file": MODEL_FILE_NAME,
