@@ -528,8 +528,11 @@ with st.expander("📦 Model Training Results", expanded=False):
 # ------------------------------------------------------------
 
 @st.cache_resource
-def load_model(path):
-    return tf.keras.models.load_model(path)
+def load_tflite_model(path):
+    interpreter = tf.lite.Interpreter(model_path=path)
+    interpreter.allocate_tensors()
+    return interpreter
+
 
 model_load_placeholder = st.empty()
 
@@ -547,27 +550,33 @@ with model_load_placeholder.container():
 try:
     if not _model_exists:
         raise FileNotFoundError(MODEL_FILE_NAME)
-    model = load_model(MODEL_FILE_NAME)
+    
+    # Load the TFLite model safely
+    model = load_tflite_model(MODEL_FILE_NAME)
     time.sleep(0.4)
     model_load_placeholder.empty()
+
 except Exception as e:
     model_load_placeholder.empty()
     with st.container(border=True):
         st.error(
             f"🚫 **Model file not found or could not be loaded.**\n\n"
             f"Expected file: `{MODEL_FILE_NAME}` in the same folder as `app.py`.\n\n"
-            f"Please contact the system administrator, or place the trained `.h5` model file "
+            f"Please contact the system administrator, or place the trained `.tflite` model file "
             f"in the application directory and refresh the page."
         )
         with st.expander("Technical details"):
             st.code(str(e))
     st.stop()
 
-def get_model_input_size(m, fallback=(224, 224)):
+
+# 2. Corrected input size extractor for TFLite structure
+def get_model_input_size(interpreter, fallback=(224, 224)):
     try:
-        shape = m.input_shape
-        if isinstance(shape, list):
-            shape = shape[0]
+        # TFLite uses get_input_details() rather than .input_shape
+        input_details = interpreter.get_input_details()
+        # Shape structure typically: [Batch, Height, Width, Channels]
+        shape = input_details[0]['shape']
         h, w = shape[1], shape[2]
         if h and w:
             return (int(w), int(h))
@@ -575,6 +584,8 @@ def get_model_input_size(m, fallback=(224, 224)):
         pass
     return fallback
 
+
+# Extract the correct tensor dimension constraints
 MODEL_INPUT_SIZE = get_model_input_size(model)
 
 # ------------------------------------------------------------
