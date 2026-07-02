@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: bharatiya-rail-track-fault-detection
+    name: bharatiya-rail-track-fault-detection-ai
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
