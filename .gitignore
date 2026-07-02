@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual Environment
+venv/
+.env
+
+# AI Model
+*.h5
+
+# Streamlit
+.streamlit/
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
