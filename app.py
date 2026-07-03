@@ -681,26 +681,7 @@ def make_gradcam_heatmap(img_array, grad_model, pred_index=None, errors=None):
         return None
 
 def make_saliency_heatmap(img_array, m, pred_index=None, errors=None, n_samples=15, noise_frac=0.12):
-    """Fallback for ANY architecture: SmoothGrad input-gradient saliency map.
-
-    A single vanilla gradient (the old implementation) is extremely noisy —
-    it lights up on high-contrast pixels (a bright rock against dark
-    gravel, a rail's specular glint, a shadow edge) that have nothing to do
-    with the predicted defect class. It also always min-max-normalised the
-    result to 0-1, so even a map that is almost entirely noise still shows
-    a "fully hot" red region somewhere, which is exactly what produced the
-    false bounding box on the rock in the ballast.
-
-    SmoothGrad fixes this by averaging the gradient over several copies of
-    the image with a small amount of Gaussian noise added, which cancels
-    out noisy, unstable per-pixel gradients and keeps the signal that is
-    consistently associated with the predicted class.
-
-    Returns (heatmap, raw_signal_strength). raw_signal_strength is the
-    pre-normalisation dynamic range of the averaged gradient magnitude —
-    callers should treat a low value as "this localisation is not
-    trustworthy" rather than rendering it with full visual confidence.
-    """
+    """Fallback for ANY architecture: SmoothGrad input-gradient saliency map."""
     try:
         img_tensor = tf.convert_to_tensor(img_array, dtype=tf.float32)
         stdev = noise_frac * float(tf.math.reduce_std(img_tensor))
@@ -740,28 +721,12 @@ def make_saliency_heatmap(img_array, m, pred_index=None, errors=None, n_samples=
         return None, 0.0
 
 def make_occlusion_heatmap(pil_img, m, input_size, pred_index, grid=10, errors=None):
-    """
-    Occlusion sensitivity: slides a BLACK patch (not grey — black forces a
-    real signal change and cannot be confused with a normalised mean pixel)
-    over the image in an overlapping grid pattern. Wherever blanking a patch
-    causes the biggest confidence drop for the predicted class is exactly
-    where the AI found the defect.
-
-    Key improvements over the previous version:
-    • Occlusion value = 0.0 (black) instead of 0.5 (grey)
-    • Patch size = 40 % of image dimension, with 50 % overlap — much larger
-      regions so even localised defects get a strong signal
-    • Normalise against the RANGE of drops (max - min) not just max, so even
-      small absolute differences produce a visible gradient
-    • If all drops are below a tiny epsilon, clamp the minimum to 0 and still
-      return a valid (flat but non-null) map so the overlay renders
-    """
+    """Occlusion sensitivity fallback heatmap."""
     try:
         img_resized = pil_img.convert("RGB").resize(input_size)
         base_arr = np.array(img_resized).astype("float32") / 255.0
         H, W, _ = base_arr.shape
 
-        # Patch = 40 % of height/width; stride = 50 % of patch (50 % overlap)
         patch_h = max(1, int(H * 0.40))
         patch_w = max(1, int(W * 0.40))
         stride_h = max(1, patch_h // 2)
@@ -777,7 +742,7 @@ def make_occlusion_heatmap(pil_img, m, input_size, pred_index, grid=10, errors=N
                 y1 = min(y0 + patch_h, H)
                 x1 = min(x0 + patch_w, W)
                 occluded = base_arr.copy()
-                occluded[y0:y1, x0:x1, :] = 0.0   # BLACK patch — maximum disruption
+                occluded[y0:y1, x0:x1, :] = 0.0
                 batch_imgs.append(occluded)
                 boxes.append((y0, y1, x0, x1))
                 x0 += stride_w
@@ -785,27 +750,18 @@ def make_occlusion_heatmap(pil_img, m, input_size, pred_index, grid=10, errors=N
 
         batch_arr = np.stack(batch_imgs, axis=0)
         preds = m.predict(batch_arr, verbose=0)[:, pred_index].astype("float32")
-        drops = baseline_pred - preds  # can be negative (ignore — means no importance)
+        drops = baseline_pred - preds
 
-        # Build a score map by accumulating drops into a float grid
         score_map = np.zeros((H, W), dtype="float32")
         count_map = np.zeros((H, W), dtype="float32")
         for (y0, y1, x0, x1), d in zip(boxes, drops):
             score_map[y0:y1, x0:x1] += d
             count_map[y0:y1, x0:x1] += 1.0
         count_map = np.where(count_map == 0, 1, count_map)
-        score_map = score_map / count_map  # average drop per pixel
+        score_map = score_map / count_map
 
-        # Clip negatives (occluded-but-higher-confidence patches are irrelevant)
         score_map = np.clip(score_map, 0, None)
 
-        # Normalise: use the range so even small relative differences are visible.
-        # IMPORTANT: this normalised map is only useful for *display*. The raw
-        # (pre-normalisation) drop range is what tells us whether the result
-        # means anything — a tiny raw range still gets stretched to fill 0-1
-        # here, which is exactly the bug that let a rock in the gravel look
-        # like a "fully confident" defect region. Callers should gate on the
-        # raw range, not on this normalised map.
         s_min, s_max = score_map.min(), score_map.max()
         rng = s_max - s_min
         if rng < 1e-8:
@@ -825,31 +781,11 @@ def make_occlusion_heatmap(pil_img, m, input_size, pred_index, grid=10, errors=N
         return None, 0.0
 
 
-# Minimum raw (pre-normalisation) signal strength required before a
-# saliency/occlusion result is treated as a trustworthy localisation.
-# This is the missing piece that let a random high-contrast rock in the
-# ballast get rendered as a full-confidence red "DEFECT" box: the old
-# code always stretched whatever it found to fill 0-1, so a near-zero
-# real signal looked visually identical to a strong one.
-SALIENCY_MIN_RAW_RANGE = 0.02      # avg-gradient-magnitude units
-OCCLUSION_MIN_RAW_RANGE = 0.05     # softmax-probability-drop units (5%)
+SALIENCY_MIN_RAW_RANGE = 0.02
+OCCLUSION_MIN_RAW_RANGE = 0.05
 
 def get_detection_heatmap(img_array, pred_index, pil_img=None, input_size=None, errors=None):
-    """Tries Grad-CAM, then SmoothGrad saliency, then (guaranteed) occlusion
-    sensitivity. Returns (heatmap, method, reliable).
-
-    `reliable` is the key addition: Grad-CAM is class-discriminative and
-    spatially grounded in real conv features, so it's trusted whenever it
-    succeeds. Saliency and occlusion are much noisier fallbacks — they are
-    only marked reliable if their *raw, pre-normalisation* signal clears a
-    meaningful threshold. If not, the caller should NOT draw a confident
-    "this exact spot is the defect" box, since that overstates what the
-    model actually knows.
-
-    If `errors` (a list) is passed, it's filled with a diagnostic message
-    per failed/low-confidence method so the real cause is visible instead
-    of a silent fallback.
-    """
+    """Tries Grad-CAM, then SmoothGrad saliency, then occlusion sensitivity."""
     heatmap = make_gradcam_heatmap(img_array, GRAD_CAM_MODEL, pred_index, errors=errors)
     if heatmap is not None:
         return heatmap, "gradcam", True
@@ -879,34 +815,14 @@ def get_detection_heatmap(img_array, pred_index, pil_img=None, input_size=None, 
     return None, None, False
 
 def overlay_heatmap_on_image(pil_img, heatmap, alpha=0.72, reliable=True):
-    """
-    Resizes the heatmap to the original image size and blends a vivid
-    blue → yellow → red colour ramp on top of the photo.
-
-    Changes vs previous:
-    • alpha raised to 0.72 so the colour overlay is clearly visible
-    • Power-law sharpening (heatmap^0.5) spreads mid-range values so the
-      colour gradient is visible even when the model produces a diffuse map
-    • Draws explicit bounding boxes around the top hottest grid cell(s) —
-      but ONLY when `reliable=True`. Every heatmap method here is always
-      normalised to fill the full 0-1 range, so a weak/noisy signal (e.g.
-      gradient contrast on a rock in the ballast, unrelated to the actual
-      defect) looked exactly as "hot" as a strong one. When the caller
-      tells us the raw signal was too weak to trust, we skip the assertive
-      red "DEFECT" box entirely and use a muted, clearly-labelled marker
-      instead — so the report never overstates precision the model doesn't
-      actually have.
-    """
+    """Resizes the heatmap to the original image size and blends a colour ramp on top."""
     orig_w, orig_h = pil_img.size
-    # Upsample raw heatmap to original image size
     hm_up = Image.fromarray(np.uint8(255 * np.clip(heatmap, 0, 1)))
     hm_up = hm_up.resize((orig_w, orig_h), resample=Image.BILINEAR)
     heatmap_arr = np.array(hm_up).astype("float32") / 255.0
 
-    # Power-law sharpening: spreads mid-range values outward
     heatmap_arr = np.power(heatmap_arr, 0.5)
 
-    # Vivid blue → yellow → red colour ramp
     r = np.clip(2.0 * heatmap_arr - 0.5, 0, 1)
     g = np.clip(2.0 * heatmap_arr * (1.0 - heatmap_arr) * 3.5, 0, 1)
     b = np.clip(1.0 - 2.0 * heatmap_arr, 0, 1)
@@ -918,12 +834,10 @@ def overlay_heatmap_on_image(pil_img, heatmap, alpha=0.72, reliable=True):
     blended = np.clip(blended * 255, 0, 255).astype("uint8")
     result = Image.fromarray(blended)
 
-    # --- Draw explicit bounding boxes on the top-3 hottest regions ---
     try:
         from PIL import ImageDraw, ImageFont
         draw = ImageDraw.Draw(result)
 
-        # Divide the heatmap into a coarse grid, find top-3 cells
         cell_rows, cell_cols = 6, 6
         cell_h = orig_h // cell_rows
         cell_w = orig_w // cell_cols
@@ -938,9 +852,8 @@ def overlay_heatmap_on_image(pil_img, heatmap, alpha=0.72, reliable=True):
         cell_scores.sort(reverse=True)
 
         if reliable:
-            # Strong, trustworthy signal — draw the assertive red box(es).
             top_cells = cell_scores[:3]
-            top_threshold = top_cells[0][0] * 0.65  # only draw cells ≥ 65 % of best
+            top_threshold = top_cells[0][0] * 0.65
             for rank, (score, cy0, cy1, cx0, cx1) in enumerate(top_cells):
                 if score < top_threshold:
                     break
@@ -956,9 +869,6 @@ def overlay_heatmap_on_image(pil_img, heatmap, alpha=0.72, reliable=True):
                 draw.rectangle([cx0, label_y, cx0 + len(label) * 8 + 6, label_y + 16], fill=outline_color)
                 draw.text((cx0 + 3, label_y + 1), label, fill=(255, 255, 255))
         else:
-            # Signal too weak to trust — do NOT claim a precise location.
-            # Draw a single muted, dashed-style marker with an honest label
-            # instead of a bold red box that overstates confidence.
             score, cy0, cy1, cx0, cx1 = cell_scores[0]
             outline_color = (160, 160, 170)
             for offset in range(0, cx1 - cx0, 10):
@@ -974,16 +884,12 @@ def overlay_heatmap_on_image(pil_img, heatmap, alpha=0.72, reliable=True):
             draw.rectangle([cx0, label_y, cx0 + len(label) * 7 + 6, label_y + 16], fill=outline_color)
             draw.text((cx0 + 3, label_y + 1), label, fill=(20, 20, 20))
     except Exception:
-        pass  # bounding boxes are optional — never crash the overlay
+        pass
 
     return result, heatmap_arr
 
 def estimate_defect_area_level(heatmap_arr, threshold=0.35):
-    """
-    Estimates what fraction of the image area is 'hot' (AI-detected defect
-    region). Threshold lowered to 0.35 (was 0.5) to match the brighter
-    colour ramp and power-law sharpening applied in overlay_heatmap_on_image.
-    """
+    """Estimates what fraction of the image area is 'hot' (AI-detected defect region)."""
     hot_fraction = float((heatmap_arr >= threshold).mean()) * 100
     if hot_fraction < 8:
         level = "Localised / Spot Defect"
@@ -996,7 +902,6 @@ def estimate_defect_area_level(heatmap_arr, threshold=0.35):
 
 # ------------------------------------------------------------
 # CLASS LABELS + SEVERITY MAPPING
-
 # ------------------------------------------------------------
 
 CLASS_NAMES = ["Cracks", "Flakings", "Squats"]
@@ -1014,17 +919,11 @@ DEPARTMENTS = [
 
 # ------------------------------------------------------------
 # MASTER (ALL-USERS) CSV LOG
-# Every inspection from every staff member who uses this app on this
-# server is appended here, so the downloadable CSV grows across
-# sessions/users rather than resetting each time someone opens the app.
 # ------------------------------------------------------------
 
 MASTER_LOG_FILE = "all_inspections_log.csv"
 MASTER_LOG_COLUMNS = ["Time", "Inspector", "Emp ID", "Department", "Location", "Prediction", "Severity", "Confidence", "Defect Area %", "Spread Level", "Localization Reliable", "Image Path"]
 
-# Folder where the heatmap-highlighted inspection photo is saved so it can
-# later be embedded into the official PDF report for ANY past record, not
-# just the most recently captured one in memory.
 REPORT_IMAGES_DIR = "report_images"
 _os.makedirs(REPORT_IMAGES_DIR, exist_ok=True)
 
@@ -1617,9 +1516,7 @@ def build_context_summary():
             f"Average confidence: {avg_conf}%. Most frequent defect: {most_common}.")
 
 def _qa_bank():
-    """Curated bank of exact, high-quality question/answer pairs.
-    Checked first (via close-match scoring) so common questions get a
-    precise, vetted answer instead of relying purely on keyword regex."""
+    """Curated bank of exact, high-quality question/answer pairs."""
     return {
         "what is a squat defect": (
             "**Squats** are localised rail-surface fatigue defects that can develop into transverse "
@@ -1689,7 +1586,6 @@ def chatbot_response(question):
     q_raw = question.strip()
     q = q_raw.lower().strip().rstrip("?!.")
 
-    # 1) Try to match against the curated, exact question bank first.
     bank = _qa_bank()
     bank_keys = list(bank.keys())
     close = difflib.get_close_matches(q, bank_keys, n=1, cutoff=0.72)
@@ -1699,7 +1595,6 @@ def chatbot_response(question):
             return build_context_summary()
         return bank[matched]
 
-    # 2) Fall back to keyword/intent matching for free-form phrasing.
     if re.search(r"\b(squat)s?\b", q):
         return bank["what is a squat defect"]
     if re.search(r"\b(crack)s?\b", q):
@@ -1857,10 +1752,7 @@ with tab_reports:
                 sev_colors = {"None": (22, 163, 74), "Low": (202, 138, 4), "Medium": (234, 88, 12), "High": (220, 38, 38)}
 
                 def pdf_safe(text):
-                    """Core PDF fonts (Helvetica/Arial) only support Latin-1.
-                    Replace common Unicode punctuation with ASCII equivalents and
-                    drop anything else outside the Latin-1 range so PDF generation
-                    never throws an encoding exception."""
+                    """Core PDF fonts (Helvetica/Arial) only support Latin-1."""
                     if text is None:
                         return ""
                     text = str(text)
@@ -1940,8 +1832,6 @@ with tab_reports:
                         value_x = self.l_margin + label_w
                         value_w = self.w - self.r_margin - value_x
                         if value_w < 10:
-                            # Not enough room on this line for the value column —
-                            # drop to a fresh line under the label instead of erroring.
                             self.ln(7)
                             self.set_x(self.l_margin)
                             value_x = self.l_margin
@@ -1957,7 +1847,6 @@ with tab_reports:
                 pdf.set_auto_page_break(auto=True, margin=20)
                 pdf.add_page()
 
-                # --- Inspector & Inspection Details ---
                 pdf.section_title("1. Inspector & Inspection Details")
                 pdf.kv_row("Inspector Name :", latest.get('Inspector', '-'))
                 pdf.kv_row("Employee ID :", latest.get('Emp ID', '-'))
@@ -1969,7 +1858,6 @@ with tab_reports:
                 pdf.kv_row("Location / Section :", latest['Location'])
                 pdf.ln(2)
 
-                # --- Inspection Photo (exact detected region) ---
                 _img_path = latest.get("Image Path", "")
                 if _img_path and _os.path.exists(_img_path):
                     pdf.section_title("2. Inspection Photo (Exact Detected Region)")
@@ -1977,7 +1865,7 @@ with tab_reports:
                         from PIL import Image as _PILImage
                         with _PILImage.open(_img_path) as _pim:
                             _iw, _ih = _pim.size
-                        max_w = 110.0  # mm
+                        max_w = 110.0
                         img_w = max_w
                         img_h = img_w * (_ih / _iw)
                         max_h = 95.0
@@ -1999,7 +1887,6 @@ with tab_reports:
                         pdf.multi_cell(0, 7, "Photo could not be embedded in this report.")
                         pdf.ln(2)
 
-                # --- Detection Results table ---
                 pdf.section_title("3. AI Detection Results")
                 pdf.set_font("Arial", "B", 10)
                 pdf.set_fill_color(11, 61, 145)
@@ -2032,20 +1919,17 @@ with tab_reports:
                 pdf.set_text_color(0, 0, 0)
                 pdf.ln(4)
 
-                # --- Recommended Action ---
                 pdf.section_title("4. Recommended Action")
                 pdf.set_font("Arial", "", 10.5)
                 pdf.multi_cell(0, 7, pdf_safe(sev_info["action"]))
                 pdf.ln(2)
 
-                # --- Session Summary ---
                 pdf.section_title("5. Session Summary")
                 hist_df_pdf = pd.DataFrame(st.session_state.history)
                 pdf.set_font("Arial", "", 10.5)
                 pdf.multi_cell(0, 7, pdf_safe(build_context_summary()))
                 pdf.ln(2)
 
-                # --- Sign-off ---
                 pdf.section_title("6. Authentication & Sign-off")
                 pdf.set_font("Arial", "", 10.5)
                 pdf.cell(95, 7, "Inspector Signature: ____________________", ln=0)
