@@ -1315,29 +1315,36 @@ with tab_prediction:
                 st.plotly_chart(prob_fig, use_container_width=True)
 
                 # --------------------------------------------------------
-                # EXACT DETECTED REGION — Grad-CAM heatmap overlay
+                # EXACT DETECTED REGION — heatmap overlay (opt-in)
                 # --------------------------------------------------------
                 st.write("---")
                 st.markdown("#### 🎯 Exact Part Detected (AI Focus Map)")
+                st.caption(
+                    "Optional: computing this runs several extra AI passes and uses more memory. "
+                    "On free-tier hosting this can occasionally crash the app session — leave it "
+                    "off if you just need the classification result above."
+                )
+                compute_heatmap = st.checkbox("Compute AI Focus Map for this image", value=False, key=f"heatmap_toggle_{class_index}_{confidence:.6f}")
 
                 heatmap_col1, heatmap_col2 = st.columns([1.4, 1])
 
                 gradcam_ok = False
                 heatmap_method = None
                 localization_reliable = False
-                try:
-                    with st.spinner("🎯 Computing exact defect region..."):
-                        heatmap, heatmap_method, localization_reliable = get_detection_heatmap(
-                            input_image, pred_index=class_index, pil_img=image, input_size=MODEL_INPUT_SIZE
-                        )
-                        if heatmap is not None:
-                            overlay_img, heatmap_arr = overlay_heatmap_on_image(
-                                image, heatmap, reliable=localization_reliable
+                if compute_heatmap:
+                    try:
+                        with st.spinner("🎯 Computing exact defect region..."):
+                            heatmap, heatmap_method, localization_reliable = get_detection_heatmap(
+                                input_image, pred_index=class_index, pil_img=image, input_size=MODEL_INPUT_SIZE
                             )
-                            hot_pct, area_level = estimate_defect_area_level(heatmap_arr)
-                            gradcam_ok = True
-                except Exception as gc_err:
-                    gradcam_ok = False
+                            if heatmap is not None:
+                                overlay_img, heatmap_arr = overlay_heatmap_on_image(
+                                    image, heatmap, reliable=localization_reliable
+                                )
+                                hot_pct, area_level = estimate_defect_area_level(heatmap_arr)
+                                gradcam_ok = True
+                    except Exception as gc_err:
+                        gradcam_ok = False
 
                 with heatmap_col1:
                     if gradcam_ok:
@@ -1355,7 +1362,10 @@ with tab_prediction:
                                 "not confirmed, and verify the defect location on-site."
                             )
                     else:
-                        st.info("Exact-region highlighting could not be computed for this image. The classification result above is still fully valid.")
+                        if compute_heatmap:
+                            st.info("Exact-region highlighting could not be computed for this image. The classification result above is still fully valid.")
+                        else:
+                            st.info("Check the box above if you'd like to see which part of the image the AI focused on. The classification result above is already complete.")
 
                 with heatmap_col2:
                     if gradcam_ok:
