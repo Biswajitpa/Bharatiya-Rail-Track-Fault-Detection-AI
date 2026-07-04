@@ -780,10 +780,18 @@ def make_occlusion_heatmap(pil_img, m, input_size, pred_index, grid=10, errors=N
         base_arr = np.array(img_resized).astype("float32") / 255.0
         H, W, _ = base_arr.shape
 
-        patch_h = max(1, int(H * 0.40))
-        patch_w = max(1, int(W * 0.40))
-        stride_h = max(1, patch_h // 2)
-        stride_w = max(1, patch_w // 2)
+        # Speed optimization: use a coarse 3x3 non-overlapping grid instead of
+        # a dense 40%-patch/50%-overlap grid. The old settings needed ~25+
+        # separate model inferences per image just for the heatmap, which is
+        # very slow on TFLite (no batching) + Render's free-tier CPU. A 3x3
+        # grid needs only ~9 inferences — roughly 3x faster — while still
+        # giving a usable coarse localization (top row/column/quadrant of
+        # the defect), which is sufficient given occlusion is already a
+        # lower-precision fallback (used only when Grad-CAM isn't available).
+        patch_h = max(1, int(H / 3) + 1)
+        patch_w = max(1, int(W / 3) + 1)
+        stride_h = patch_h
+        stride_w = patch_w
 
         baseline_pred = float(m.predict(np.expand_dims(base_arr, axis=0), verbose=0)[0][pred_index])
 
@@ -843,15 +851,25 @@ def get_detection_heatmap(img_array, pred_index, pil_img=None, input_size=None, 
     if heatmap is not None:
         return heatmap, "gradcam", True
 
-    heatmap, raw_range = make_saliency_heatmap(img_array, model, pred_index, errors=errors)
-    if heatmap is not None:
-        reliable = raw_range >= SALIENCY_MIN_RAW_RANGE
-        if not reliable and errors is not None:
-            errors.append(
-                f"Saliency: raw signal range {raw_range:.5f} is below the "
-                f"reliability threshold ({SALIENCY_MIN_RAW_RANGE}) — localisation is likely noise."
-            )
-        return heatmap, "saliency", reliable
+    # Skip SmoothGrad saliency entirely for TFLite models — it requires
+    # calling the model directly (m(noisy)) and computing gradients via
+    # GradientTape, neither of which a TFLiteModelWrapper supports. Without
+    # this check, the 15-sample gradient loop below would run, fail on
+    # every single sample, and waste time before falling through anyway.
+    is_tflite = isinstance(model, TFLiteModelWrapper)
+
+    if not is_tflite:
+        heatmap, raw_range = make_saliency_heatmap(img_array, model, pred_index, errors=errors)
+        if heatmap is not None:
+            reliable = raw_range >= SALIENCY_MIN_RAW_RANGE
+            if not reliable and errors is not None:
+                errors.append(
+                    f"Saliency: raw signal range {raw_range:.5f} is below the "
+                    f"reliability threshold ({SALIENCY_MIN_RAW_RANGE}) — localisation is likely noise."
+                )
+            return heatmap, "saliency", reliable
+    elif errors is not None:
+        errors.append("Saliency: skipped for TFLite model (gradients not supported).")
 
     if pil_img is not None and input_size is not None:
         heatmap, raw_range = make_occlusion_heatmap(pil_img, model, input_size, pred_index, errors=errors)
