@@ -10,7 +10,17 @@ import tensorflow as tf
 import numpy as np
 import pandas as pd
 from PIL import Image
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# Server hosting (Render/Streamlit Cloud) typically runs in UTC, which made
+# all timestamps in this app show the wrong local time for Indian Railways
+# staff. IST is a fixed UTC+5:30 offset with no daylight saving, so this
+# simple fixed-offset conversion is accurate year-round.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def now_ist():
+    """Returns the current time converted to IST, regardless of server timezone."""
+    return datetime.now(timezone.utc).astimezone(IST)
 import plotly.express as px
 import plotly.graph_objects as go
 from fpdf import FPDF
@@ -428,7 +438,7 @@ with id_col:
         <div>
             <div class='id-name'>{emp.get('name','—')}</div>
             <div class='id-role'>{emp.get('designation','—')} · {emp.get('zone','—')}</div>
-            <div class='id-meta'>EMP ID: {emp.get('emp_id','—')} &nbsp;|&nbsp; DIVISION: {emp.get('division','—')} &nbsp;|&nbsp; AGE/GENDER: {emp.get('age','—')} / {emp.get('gender','—')} &nbsp;|&nbsp; SHIFT: {datetime.now().strftime('%d-%m-%Y')}</div>
+            <div class='id-meta'>EMP ID: {emp.get('emp_id','—')} &nbsp;|&nbsp; DIVISION: {emp.get('division','—')} &nbsp;|&nbsp; AGE/GENDER: {emp.get('age','—')} / {emp.get('gender','—')} &nbsp;|&nbsp; SHIFT: {now_ist().strftime('%d-%m-%Y')}</div>
         </div>
     </div>
     """,
@@ -1088,8 +1098,8 @@ with tab_dashboard:
         det_col1, det_col2, det_col3 = st.columns(3)
 
         with det_col1:
-            inspection_date = datetime.now().strftime("%d-%m-%Y")
-            inspection_time = datetime.now().strftime("%H:%M:%S")
+            inspection_date = now_ist().strftime("%d-%m-%Y")
+            inspection_time = now_ist().strftime("%H:%M:%S")
             st.markdown(
                 f"""
                 <div class='meta-chip'>
@@ -1413,14 +1423,14 @@ with tab_prediction:
             try:
                 img_to_save = overlay_img if gradcam_ok else image
                 _safe_emp_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(emp.get("emp_id", "NA")))
-                _ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                _ts = now_ist().strftime("%Y%m%d_%H%M%S_%f")
                 saved_image_path = _os.path.join(REPORT_IMAGES_DIR, f"{_safe_emp_id}_{_ts}.jpg")
                 img_to_save.convert("RGB").save(saved_image_path, format="JPEG", quality=85)
             except Exception:
                 saved_image_path = ""
 
             record = {
-                "Time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+                "Time": now_ist().strftime("%d-%m-%Y %H:%M:%S"),
                 "Inspector": emp.get("name", "—"),
                 "Emp ID": emp.get("emp_id", "—"),
                 "Department": department,
@@ -1836,7 +1846,7 @@ with tab_reports:
                         self.cell(50, 5, f"Report ID: {report_id}", ln=True, align="R")
                         self.set_xy(150, 12)
                         self.set_font("Arial", "", 8.5)
-                        self.cell(50, 5, datetime.now().strftime("Issued: %d-%m-%Y %H:%M"), ln=True, align="R")
+                        self.cell(50, 5, now_ist().strftime("Issued: %d-%m-%Y %H:%M"), ln=True, align="R")
 
                         self.set_text_color(0, 0, 0)
                         self.set_y(34)
