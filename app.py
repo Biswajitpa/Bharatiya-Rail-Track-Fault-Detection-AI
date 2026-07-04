@@ -1031,51 +1031,18 @@ if "chat_log" not in st.session_state:
     st.session_state.chat_log = []
 
 # ------------------------------------------------------------
-# GEOLOCATION COMPONENT
+# LOCATION INPUT
+# Note: Browser auto-geolocation was removed. components.html() can only
+# render HTML/JS one-way into an iframe — it cannot return a value back
+# into Python (that requires a full custom Streamlit component built with
+# components.declare_component). The previous implementation looked like
+# it worked but never actually set location_detected = True, which meant
+# it silently re-ran a GPS permission request AND an external network call
+# (Nominatim reverse-geocoding) on every single script rerun — including
+# every time a photo was uploaded. That repeated permission-prompt +
+# network-call cycle on every rerun was freezing the app after uploads.
+# Manual entry is simpler, instant, and has no hidden rerun cost.
 # ------------------------------------------------------------
-
-def get_browser_location():
-    loc_html = """
-    <div id="geo-status" style="color:#9fb3d1;font-size:13px;font-family:Poppins,sans-serif;">
-        📍 Detecting location...
-    </div>
-    <script>
-    const statusDiv = document.getElementById("geo-status");
-    function sendLocation(lat, lon, label) {
-        const data = {lat: lat, lon: lon, label: label};
-        window.parent.postMessage(
-            {isStreamlitMessage: true, type: "streamlit:setComponentValue", value: data}, "*"
-        );
-    }
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-            function(position) {
-                const lat = position.coords.latitude.toFixed(5);
-                const lon = position.coords.longitude.toFixed(5);
-                statusDiv.innerHTML = "📍 Location detected: " + lat + ", " + lon;
-                fetch("https://nominatim.openstreetmap.org/reverse?format=json&lat=" + lat + "&lon=" + lon)
-                .then(res => res.json())
-                .then(data => {
-                    const label = data.display_name || (lat + ", " + lon);
-                    statusDiv.innerHTML = "📍 " + label;
-                    sendLocation(lat, lon, label);
-                })
-                .catch(() => {
-                    statusDiv.innerHTML = "📍 " + lat + ", " + lon;
-                    sendLocation(lat, lon, lat + ", " + lon);
-                });
-            },
-            function(error) {
-                statusDiv.innerHTML = "⚠ Location access denied. Please enter manually.";
-                sendLocation(null, null, "");
-            }
-        );
-    } else {
-        statusDiv.innerHTML = "⚠ Geolocation not supported by this browser.";
-    }
-    </script>
-    """
-    return components.html(loc_html, height=40)
 
 # ============================================================
 # TABBED NAVIGATION — Dashboard · Prediction · Analytics · Assistant · Reports
@@ -1141,26 +1108,18 @@ with tab_dashboard:
         with det_col3:
             st.markdown("<div class='meta-label' style='margin-bottom:4px;'>📍 Current Location</div>", unsafe_allow_html=True)
 
-            if "location_detected" not in st.session_state:
-                st.session_state.location_detected = False
             if "location_label" not in st.session_state:
                 st.session_state.location_label = ""
-
-            if not st.session_state.location_detected:
-                geo_value = get_browser_location()
-                if isinstance(geo_value, dict) and geo_value.get("label"):
-                    st.session_state.location_label = geo_value["label"]
-                    st.session_state.location_detected = True
 
             location = st.text_input(
                 "Location / Track Section",
                 value=st.session_state.location_label,
-                placeholder="Auto-detecting... or type manually (e.g. KM 45 Section, Cuttack Yard)",
+                placeholder="e.g. KM 45 Section, Cuttack Yard",
                 label_visibility="collapsed"
             )
             st.session_state.location_label = location
 
-        st.caption("Location is auto-detected from your browser when permission is granted. You can edit it manually at any time.")
+        st.caption("Enter the track section or location manually.")
 
     # persist for use in other tabs
     st.session_state["_department"] = department
