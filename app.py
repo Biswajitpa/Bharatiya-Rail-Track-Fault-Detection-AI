@@ -475,6 +475,7 @@ f"""
     <div class='status-pill'><span class='status-dot'></span>Session Active</div>
     <div class='status-pill'><span class='status-dot'></span>{len(st.session_state.get('history', []))} Inspections Logged</div>
     <div class='status-pill'><span class='status-dot'></span>Zone: {emp.get('zone','—')}</div>
+    <div class='status-pill'><span class='status-dot'></span>TF: {tf.__version__}</div>
 </div>
 """,
 unsafe_allow_html=True
@@ -527,11 +528,46 @@ with st.expander("📦 Model Training Results", expanded=False):
 # LOAD MODEL
 # ------------------------------------------------------------
 
+class TFLiteModelWrapper:
+    """Wraps a tf.lite.Interpreter so the rest of the app can call it the
+    same way it would call a Keras model (`.predict(x)`), since a raw
+    TFLite Interpreter has no .predict(), no .layers, and doesn't support
+    gradients the way a Keras model does. This wrapper only provides the
+    forward-pass API — Grad-CAM and gradient-based saliency are skipped
+    entirely for TFLite models (see _build_gradcam_model / get_detection_heatmap),
+    since those require backpropagation that TFLite doesn't expose."""
+
+    def __init__(self, interpreter):
+        self.interpreter = interpreter
+        self.input_details = interpreter.get_input_details()
+        self.output_details = interpreter.get_output_details()
+
+    def predict(self, x, verbose=0):
+        x = np.asarray(x)
+        in_dtype = self.input_details[0]['dtype']
+        if x.dtype != in_dtype:
+            x = x.astype(in_dtype)
+        outputs = []
+        for i in range(x.shape[0]):
+            single = np.expand_dims(x[i], axis=0)
+            self.interpreter.set_tensor(self.input_details[0]['index'], single)
+            self.interpreter.invoke()
+            out = self.interpreter.get_tensor(self.output_details[0]['index'])
+            outputs.append(out[0])
+        return np.array(outputs)
+
+    def get_input_details(self):
+        return self.input_details
+
+    def get_output_details(self):
+        return self.output_details
+
+
 @st.cache_resource
 def load_tflite_model(path):
     interpreter = tf.lite.Interpreter(model_path=path)
     interpreter.allocate_tensors()
-    return interpreter
+    return TFLiteModelWrapper(interpreter)
 
 
 model_load_placeholder = st.empty()
@@ -565,8 +601,17 @@ except Exception as e:
             f"Please contact the system administrator, or place the trained `.tflite` model file "
             f"in the application directory and refresh the page."
         )
-        with st.expander("Technical details"):
+        with st.expander("Technical details", expanded=True):
             st.code(str(e))
+            st.markdown(
+                f"**Server TensorFlow version:** `{tf.__version__}`\n\n"
+                "If the error above mentions an unsupported opcode or 'older version of this "
+                "builtin might be supported', the `.tflite` file was converted with a DIFFERENT "
+                "TensorFlow version than the one installed on this server (shown above). "
+                "Re-convert the `.h5` model using **this exact TensorFlow version** "
+                f"(`pip install tensorflow=={tf.__version__}`), or update `requirements.txt` on "
+                "the server to match whatever version did the conversion."
+            )
     st.stop()
 
 
@@ -623,7 +668,15 @@ def _find_conv_layer_path(m):
 def _build_gradcam_model(m):
     """Builds a model that outputs [conv_activations, final_predictions] so
     Grad-CAM gradients can be computed, reconnecting any nested sub-model's
-    conv output back through the remaining top-level layers."""
+    conv output back through the remaining top-level layers.
+
+    Returns None immediately for non-Keras models (e.g. a TFLiteModelWrapper
+    around a tf.lite.Interpreter) since those have no .layers and don't
+    support gradients — Grad-CAM is simply not possible for a TFLite model,
+    so the caller falls back to saliency/occlusion instead."""
+    if not isinstance(m, tf.keras.Model):
+        return None
+
     container, conv_name = _find_conv_layer_path(m)
     if container is None:
         return None
