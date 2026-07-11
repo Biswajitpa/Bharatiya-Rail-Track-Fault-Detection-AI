@@ -228,13 +228,13 @@ Released under the [MIT License](./LICENSE).
 
 <div align="center">
 
-<img src="https://github.com/identicons/biswajitpattanaik.png" alt="Biswajit Pattanaik" width="90" style="border-radius:50%;" />
+<img src="https://github.com/Biswajitpa.png" alt="Biswajit Pattanaik" width="90" style="border-radius:50%;" />
 
 ### Biswajit Pattanaik
 
 *Designed, built, and maintained this project — from the classification pipeline to the reporting workflow.*
 
-[![GitHub](https://img.shields.io/badge/GitHub-Profile-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/)
+[![GitHub](https://img.shields.io/badge/GitHub-Profile-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/Biswajitpa)
 [![Issues](https://img.shields.io/badge/Report-Issue-red?style=flat-square&logo=github&logoColor=white)](../../issues)
 [![Pull Requests](https://img.shields.io/badge/Open-Pull%20Request-brightgreen?style=flat-square&logo=git&logoColor=white)](../../pulls)
 
