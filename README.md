@@ -228,8 +228,19 @@ Released under the [MIT License](./LICENSE).
 
 <div align="center">
 
-**Created and maintained by [Biswajit Pattanaik](https://github.com/)**
+<img src="https://github.com/identicons/biswajitpattanaik.png" alt="Biswajit Pattanaik" width="90" style="border-radius:50%;" />
 
-*Contributions, issues, and feature requests are welcome — feel free to open a PR or issue.*
+### Biswajit Pattanaik
+
+*Designed, built, and maintained this project — from the classification pipeline to the reporting workflow.*
+
+[![GitHub](https://img.shields.io/badge/GitHub-Profile-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/)
+[![Issues](https://img.shields.io/badge/Report-Issue-red?style=flat-square&logo=github&logoColor=white)](../../issues)
+[![Pull Requests](https://img.shields.io/badge/Open-Pull%20Request-brightgreen?style=flat-square&logo=git&logoColor=white)](../../pulls)
+
+Found a bug, have an idea, or want to improve the model, the explainability pipeline, or the reporting workflow?
+**Open an issue** or **submit a pull request** — all contributions are welcome.
+
+<sub>If this project helped you, consider giving it a ⭐ — it goes a long way.</sub>
 
 </div>
