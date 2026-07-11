@@ -98,6 +98,60 @@ Every inspection, from every user and session, is appended to a server-side CSV 
 
 ---
 
+## 🏗 System Design
+
+The diagram below shows how a single inspection flows through the system, from staff sign-in to the final PDF report, and how the shared log feeds the analytics dashboard and the AI assistant.
+
+```mermaid
+flowchart TD
+    A["👤 Inspector<br/>Intake Portal<br/>(name, ID, zone, division)"] --> B["📸 Capture / Upload<br/>Track Image"]
+    B --> C["🧠 EfficientNetB0<br/>Classifier"]
+    C --> D{"Predicted Class<br/>+ Confidence Score"}
+    D --> E["🚦 Severity Triage<br/>Low / Medium / High"]
+
+    D --> F["🎯 Explainability Pipeline"]
+    F --> F1["Grad-CAM"]
+    F1 -- unstable --> F2["SmoothGrad Saliency"]
+    F2 -- still unstable --> F3["Occlusion Sensitivity"]
+    F1 -- stable --> G{"Reliability Check"}
+    F2 -- stable --> G
+    F3 --> G
+    G -- reliable --> H["🗺 AI Focus Map<br/>Overlay"]
+    G -- unreliable --> I["⛔ No Location Overlay<br/>(shown as unconfirmed)"]
+
+    J["📍 Browser Geolocation<br/>+ Reverse Geocoding"] --> K["Editable Location<br/>Field"]
+
+    E --> L["🗄 Shared Inspection Record"]
+    H --> L
+    I --> L
+    K --> L
+
+    L --> M[("all_inspections_log.csv<br/>Persistent Shared Log")]
+
+    M --> N["📈 Live Analytics Dashboard<br/>(Plotly)"]
+    M --> O["🤖 Context-Aware<br/>AI Assistant"]
+    L --> P["📄 FPDF Report Generator"]
+    P --> Q["✅ Official PDF<br/>Inspection Report<br/>(sign-off ready)"]
+
+    style A fill:#0b3d91,color:#fff
+    style C fill:#ff9933,color:#000
+    style E fill:#138808,color:#fff
+    style M fill:#1a73c1,color:#fff
+    style Q fill:#0b3d91,color:#fff
+```
+
+**Flow summary:**
+
+1. **Intake** — the inspector's identity and posting details are captured once per session.
+2. **Capture → Classify** — the uploaded image is run through the EfficientNetB0 classifier to get a defect class and confidence score.
+3. **Triage** — class + confidence are mapped to a severity level.
+4. **Explain (gated)** — Grad-CAM is tried first; if unstable, the pipeline falls back to SmoothGrad, then occlusion sensitivity. A reliability check decides whether the resulting heatmap is shown at all.
+5. **Locate** — geolocation and reverse-geocoding suggest a location, which the inspector can edit.
+6. **Persist** — the full record (inspector, image, class, severity, focus map status, location) is appended to the shared CSV log.
+7. **Consume** — the log simultaneously feeds the live analytics dashboard, the context-aware AI assistant, and the PDF report generator, which produces the final sign-off-ready document.
+
+---
+
 ## 🧭 How It Works, End to End
 
 1. **Sign in** — the inspector fills out the intake portal (name, ID, designation, zone, division).
